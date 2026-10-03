@@ -18,7 +18,7 @@ const CATCH_RADIUS = 260; // how close a drag must get before the overlay starts
 const TINY_PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 
 let win, tray, store, settings, bridge;
-let interactive = false, dragNear = false, hidden = false;
+let interactive = false, dragNear = false, hidden = false, selfDrag = false;
 let spriteBox = null, panelBox = null;
 let lastPluginPoll = 0, pluginWasUp = false, forceSendUntil = 0;
 let batch = null;
@@ -111,6 +111,7 @@ function buildTrayMenu() {
     { label: hidden ? 'Show Stash' : 'Hide Stash', accelerator: 'Ctrl+Shift+S', click: toggleHidden },
     { label: 'Open stash', click: () => send('menu-action', 'open-stash') },
     { label: 'Settings', click: () => send('menu-action', 'settings') },
+    { label: 'Put Stash back in the corner', click: () => send('menu-action', 'reset-home') },
     { label: 'Show intro', click: () => send('menu-action', 'onboarding') },
     { label: 'Set up the Figma plugin...', click: () => { revealPlugin(); send('menu-action', 'plugin-setup'); } },
     { type: 'separator' },
@@ -183,7 +184,7 @@ function startDragWatcher() {
   };
   uIOhook.on('mousedown', (e) => { if (e.button === 1) { down = true; dragging = false; origin = screen.getCursorScreenPoint(); clearTimeout(releaseTimer); } });
   uIOhook.on('mousemove', () => {
-    if (!down || !spriteBox) return;
+    if (!down || !spriteBox || selfDrag) return;
     const p = screen.getCursorScreenPoint();
     if (!dragging && Math.hypot(p.x - origin.x, p.y - origin.y) > 12) dragging = true;
     if (!dragging) return;
@@ -198,6 +199,7 @@ function startDragWatcher() {
   });
   uIOhook.on('mouseup', (e) => {
     if (e.button !== 1) return;
+    if (!process.env.STASH_SELFTEST) send('mouse-up');   // lets the page end a carry even if the release happened outside it (tests send their own, so the tester's real clicks can't interfere)
     down = false; dragging = false;
     releaseTimer = setTimeout(() => setNear(false), 450); // let the drop event land first
   });
@@ -319,6 +321,7 @@ function wireIpc() {
   ipcMain.on('set-interactive', (_e, v) => { interactive = !!v; applyMouseMode(); });
   ipcMain.on('sprite-box', (_e, b) => { spriteBox = b; });
   ipcMain.on('panel-box', (_e, b) => { panelBox = b; });
+  ipcMain.on('self-drag', (_e, v) => { selfDrag = !!v; if (selfDrag && dragNear) { dragNear = false; applyMouseMode(); send('drag-near', false); } });
   ipcMain.handle('idle-seconds', () => powerMonitor.getSystemIdleTime());
   ipcMain.handle('plugin-up', () => pluginUp());
   ipcMain.on('set-setting', (_e, k, v) => changeSetting(k, v));

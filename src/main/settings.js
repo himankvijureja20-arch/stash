@@ -19,6 +19,8 @@ const DEFAULTS = {
   oneFramePerCollection: true,
   activeCollection: 'Random inspo',
   onboarded: false,
+  homeSpot: null,            // { fx, fy } where Stash was last put down, or null for the corner
+  pickedUpHint: false,       // the one-time "this is my spot now" tip has been shown
 };
 
 class Settings {

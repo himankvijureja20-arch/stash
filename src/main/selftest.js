@@ -335,7 +335,7 @@ async function run(args) {
   await js('window.__stash.panel.close()'); await sleep(250);
 
   console.log('Settings window');
-  const labels = ['Launch at startup', 'Summon / hide hotkey', 'Let Stash roam around', 'Roam how often', '15-minute patrol reminder', 'Ask before keeping copied images', 'Auto-sync to Figma', 'After syncing', 'Layout', 'Image width', 'Gap', 'Show source links', 'One frame per collection'];
+  const labels = ['Launch at startup', 'Summon / hide hotkey', 'Let Stash roam around', 'Roam how often', '15-minute patrol reminder', 'Ask before keeping copied images', 'Home spot', 'Auto-sync to Figma', 'After syncing', 'Layout', 'Image width', 'Gap', 'Show source links', 'One frame per collection'];
   await js(`[...document.querySelectorAll('#menu .item')].length; undefined`);
   await js('window.__stash.settings.open()');
   check('settings opens', await until('window.__stash.settings.snapshot().open', 1000));
@@ -597,6 +597,173 @@ async function run(args) {
   check('tray > Show intro opens it again', await until('window.__stash.onboarding.snapshot().open', 1500));
   await js('window.__stash.onboarding.finish()'); await sleep(300);
   await settleTo('Idle', 4000);
+
+
+
+  // ======================= PICK UP AND PLACE: PHASE A (carry) =======================
+  console.log('Pick up and carry');
+  await js('window.__stash.panel.close(); window.__stash.settings.close()'); await sleep(300);
+  await settleTo('Idle', 3000);
+  const geo2 = await js('window.__stash.geom()');               // { S, work, restY, home }
+  const ptrEv = (carryTarget, type, x, y) => js(`${carryTarget}.dispatchEvent(new PointerEvent('${type}', {bubbles:true, clientX:${x}, clientY:${y}, pointerId:5, button:0, isPrimary:true}))`);
+  const onStash = (type, x, y) => ptrEv(`document.getElementById('stash')`, type, x, y);
+  const releaseMouse = () => ptrEv('window', 'pointerup', 0, 0);
+  const carryTo = async (from, to, steps = 10) => { for (let i = 1; i <= steps; i++) { await move(from.x + (to.x - from.x) * i / steps, from.y + (to.y - from.y) * i / steps); await sleep(18); } };
+  const centreOf = async () => js('(()=>{const b=window.__stash.box();return {x:b.x+b.w*0.55,y:b.y+b.h*0.6,bx:b.x,by:b.y}})()');
+
+  let cc0 = await centreOf();
+  await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await move(cc0.x + 2, cc0.y + 1);
+  check('a press that barely moves is not yet a carry', !(await js(`document.getElementById('stash').classList.contains('held')`)));
+  const carryTarget = { x: Math.round(geo2.work.width * 0.35), y: Math.round(geo2.work.y + 300) };
+  await carryTo({ x: cc0.x, y: cc0.y }, carryTarget);
+  let heldNow = await js(`({ cls: document.getElementById('stash').classList.contains('held'), body: document.body.classList.contains('carrying'), state: window.__stash.info().stateName, panel: window.__stash.panel.snapshot().open, menu: !document.getElementById('menu').hidden })`);
+  check('dragging lifts Stash (held pose, carrying)', heldNow.cls && heldNow.body && heldNow.state === 'Ready To Catch', JSON.stringify(heldNow));
+  const pHeld = (await info()).pos;
+  check('Stash follows the cursor, keeping the spot you grabbed it by', Math.abs((pHeld.x + (cc0.x - cc0.bx)) - carryTarget.x) < 10 && Math.abs((pHeld.y + (cc0.y - cc0.by)) - carryTarget.y) < 10, `pos ${Math.round(pHeld.x)},${Math.round(pHeld.y)} for cursor ${carryTarget.x},${carryTarget.y}`);
+  check('a carry never opens the panel or the menu', !heldNow.panel && !heldNow.menu);
+  await shot('carry-held.png', '#stash', 110);
+  send('drag-near', true); await sleep(150);
+  check('the "something is being dragged to me" catch ring stays off while carried', !(await js(`document.body.classList.contains('near')`)) && (await info()).stateName === 'Ready To Catch');
+  send('drag-near', false);
+  await releaseMouse(); await sleep(450);
+  const afterDrop = await js(`({ cls: document.getElementById('stash').classList.contains('held'), body: document.body.classList.contains('carrying'), busy: window.__stash.info().busy })`);
+  check('letting go puts Stash down (no longer held)', !afterDrop.cls && !afterDrop.body);
+  check('the first time, Stash explains that it now has a spot', await hasToast(/my spot now/, 1500));
+  const pPlaced = (await info()).pos;
+  check('and it stays where you let go', Math.abs(pPlaced.x - pHeld.x) < 160 && Math.abs(pPlaced.y - pHeld.y) < 160, `moved ${Math.round(Math.hypot(pPlaced.x - pHeld.x, pPlaced.y - pHeld.y))}px`);
+  await sleep(300);
+  check('a carry is not a click: no panel opened afterwards', !(await js('window.__stash.panel.snapshot().open')));
+  check('it settles back to calm', await settleTo('Idle', 3000));
+
+  // clamped to the screen
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: -400, y: -400 }, 6);
+  let edgePos = (await info()).pos;
+  check('dragging off the top-left stops at the screen edge', edgePos.x >= geo2.work.x - 0.5 && edgePos.y >= geo2.work.y - 0.5, `${Math.round(edgePos.x)},${Math.round(edgePos.y)}`);
+  await carryTo({ x: -400, y: -400 }, { x: 9000, y: 9000 }, 6);
+  edgePos = (await info()).pos;
+  check('dragging off the bottom-right stops at the floor / right edge', edgePos.x <= geo2.work.x + geo2.work.width - geo2.S + 0.5 && edgePos.y <= geo2.restY + 0.5, `${Math.round(edgePos.x)},${Math.round(edgePos.y)}`);
+  await releaseMouse(); await sleep(300); await settleTo('Idle', 3000);
+
+  // pick it up from any state: asleep
+  js('window.__stash.fire.nap()'); await seen('Sleeping', 800);
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: cc0.x - 120, y: cc0.y - 90 }, 6);
+  check('you can pick up a sleeping Stash (it wakes up for it)', (await info()).stateName === 'Ready To Catch' && !(await info()).sleeping);
+  await releaseMouse(); await sleep(300); await settleTo('Idle', 3000);
+
+  // ... and while it is roaming
+  js('window.__stash.fire.roam()'); await seen('Roaming', 1500); await sleep(200);
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: cc0.x + 60, y: cc0.y - 60 }, 5);
+  const midRoam = await info();
+  check('you can grab Stash mid-roam: it stops walking and is held', midRoam.stateName === 'Ready To Catch' && !midRoam.moving);
+  await releaseMouse(); await sleep(400); await settleTo('Idle', 3000);
+  const parked1 = (await info()).pos; await sleep(900);
+  const parked2 = (await info()).pos;
+  check('it does not wander off by itself right after you put it down (no stray hop)', Math.hypot(parked2.x - parked1.x, parked2.y - parked1.y) < 3);
+
+  // the releaseMouse can be lost by the page: the real mouse-up from Windows still ends the carry
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: cc0.x - 100, y: cc0.y }, 4);
+  send('mouse-up'); await sleep(300);
+  check('a mouse-up that only Windows saw still puts Stash down (never stuck to the cursor)', !(await js(`document.getElementById('stash').classList.contains('held')`)));
+  await settleTo('Idle', 3000);
+
+  // not while playing ping-pong
+  await js('window.__stash.pong.open()'); await until('window.__stash.pong.snapshot().open', 1500); await sleep(1400);
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: cc0.x - 200, y: cc0.y - 100 }, 5);
+  check('during a ping-pong game Stash cannot be picked up (it is busy playing)', !(await js(`document.getElementById('stash').classList.contains('held')`)));
+  await releaseMouse();
+  await js('window.__stash.pong.close()'); await sleep(2500); await settleTo('Idle', 5000);
+
+  // the panel travels with it
+  await js('window.__stash.panel.open()'); await sleep(500);
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: cc0.x - 420, y: cc0.y }, 8);
+  await releaseMouse(); await sleep(600);
+  const panelRect = await js(`(()=>{const r=window.__stash.panel.rect(); const b=window.__stash.box(); return r ? {top:r.top, bottom:r.bottom, right:r.right, left:r.left, sx:b.x, sy:b.y, sw:b.w, sh:b.h} : null})()`);
+  const overlaps = !!panelRect && panelRect.left < panelRect.sx + panelRect.sw * 0.9 && panelRect.right > panelRect.sx + panelRect.sw * 0.1 && panelRect.top < panelRect.sy + panelRect.sh * 0.8 && panelRect.bottom > panelRect.sy + panelRect.sh * 0.2;
+  const gapX = !!panelRect && Math.max(0, panelRect.left - (panelRect.sx + panelRect.sw), panelRect.sx - panelRect.right), gapY = !!panelRect && Math.max(0, panelRect.sy - panelRect.bottom, panelRect.top - (panelRect.sy + panelRect.sh));
+  check('an open collection panel follows Stash to its new spot (beside or above it, never on top)', !!panelRect && !overlaps && Math.max(gapX, gapY) < 60, panelRect ? `panel ${Math.round(panelRect.left)}..${Math.round(panelRect.right)} x ${Math.round(panelRect.top)}..${Math.round(panelRect.bottom)}, Stash at ${Math.round(panelRect.sx)},${Math.round(panelRect.sy)}` : 'panel closed');
+  await js('window.__stash.panel.close()'); await sleep(300);
+  await settleTo('Idle', 3000);
+  await shot('carry-placed.png', '#stash', 80);
+
+
+  // ======================= PICK UP AND PLACE: PHASE B (remember + park) =======================
+  console.log('Put down and remember');
+  const spotSaved = settings.get('homeSpot');
+  check('where you put Stash down is saved in the settings file', !!spotSaved && spotSaved.fx >= 0 && spotSaved.fx <= 1 && spotSaved.fy >= 0 && spotSaved.fy <= 1, JSON.stringify(spotSaved));
+  const gB = await js('window.__stash.geom()');
+  const pB = (await info()).pos;
+  check('that spot is now Stash\'s home', Math.abs(gB.home.x - pB.x) < 2 && Math.abs(gB.home.y - pB.y) < 2, `home ${Math.round(gB.home.x)},${Math.round(gB.home.y)} vs ${Math.round(pB.x)},${Math.round(pB.y)}`);
+  check('home is no longer the bottom-right corner', gB.home.x < gB.defaultHome.x - 100);
+  check('the one-time tip was shown and is marked as seen', settings.get('pickedUpHint') === true);
+
+  // parked: it stays where you put it for a while
+  await settleTo('Idle', 3000);
+  await js('window.__stash.resetCursor()'); await move(5, 5); await sleep(200);   // cursor well away, so only the parking holds Stash back
+  await js('window.__stash.fire.roam()'); await sleep(700);
+  const parked = (await info()).pos;
+  check('Stash stays parked where you put it (a roam request does nothing yet)', Math.hypot(parked.x - pB.x, parked.y - pB.y) < 3 && (await info()).stateName === 'Idle');
+  await js('window.__stash.clearPark()');
+  js('window.__stash.fire.roam()');
+  check('after the parking time is up it roams again', await seen('Roaming', 1500));
+  await settleTo('Idle', 6000);
+  const roamed = (await info()).pos;
+  check('...and actually walks away', Math.hypot(roamed.x - pB.x, roamed.y - pB.y) > 30);
+
+  // everything that says "go home" now goes to the new spot
+  send('summon');
+  await sleep(500); await settleTo('Idle', 7000);
+  const pS = (await info()).pos;
+  check('the summon hotkey brings Stash back to the spot you chose', Math.abs(pS.x - gB.home.x) < 3 && Math.abs(pS.y - gB.home.y) < 3, `${Math.round(pS.x)},${Math.round(pS.y)}`);
+  await js('window.__stash.clearPark()');
+  js('window.__stash.fire.patrol()');
+  check('the 15-minute patrol still happens', await seen('Patrol 15 Min', 4000));
+  check('...and it ends back at your spot, not the corner', await settleTo('Idle', 14000));
+  const pP = (await info()).pos;
+  check('patrol returns to the chosen spot', Math.abs(pP.x - gB.home.x) < 3 && Math.abs(pP.y - gB.home.y) < 3, `${Math.round(pP.x)},${Math.round(pP.y)}`);
+
+  // reset from the tray
+  send('menu-action', 'reset-home');
+  check('tray > Put Stash back in the corner clears the saved spot', await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 1500) { if (settings.get('homeSpot') === null) return true; await sleep(40); } return false; })());
+  await sleep(500); await settleTo('Idle', 7000);
+  const pR = (await info()).pos, gR = await js('window.__stash.geom()');
+  check('...and Stash walks back to the bottom-right corner', Math.abs(pR.x - gR.defaultHome.x) < 3 && Math.abs(pR.y - gR.defaultHome.y) < 3 && gR.home.x === gR.defaultHome.x, `${Math.round(pR.x)},${Math.round(pR.y)}`);
+  check('...and says so', await hasToast(/Back in the corner/, 1500));
+
+  // reset from Settings
+  cc0 = await centreOf(); await js('window.__stash.resetCursor()');
+  await onStash('pointerdown', cc0.x, cc0.y);
+  await carryTo({ x: cc0.x, y: cc0.y }, { x: cc0.x - 500, y: cc0.y - 300 }, 8);
+  await releaseMouse(); await sleep(700); await settleTo('Idle', 3000);
+  check('a second placement saves a new spot', settings.get('homeSpot') !== null);
+  await js('window.__stash.settings.open()'); await sleep(450);
+  const homeRow = await js(`(()=>{const r=[...document.querySelectorAll('#settings .row')].find(x=>x.querySelector('.row-l').textContent==='Home spot'); return r ? r.querySelector('.mini-btn').textContent : null})()`);
+  check('Settings has a "Home spot" row with a put-back button', homeRow === 'Put back in the corner', String(homeRow));
+  await js(`[...document.querySelectorAll('#settings .row')].find(x=>x.querySelector('.row-l').textContent==='Home spot').querySelector('.mini-btn').click()`);
+  check('the Settings button also clears the spot', await (async () => { const t0 = Date.now(); while (Date.now() - t0 < 1500) { if (settings.get('homeSpot') === null) return true; await sleep(40); } return false; })());
+  await js('window.__stash.settings.close()'); await sleep(300); await sleep(500); await settleTo('Idle', 7000);
+
+  // what is read back from the settings file after a restart
+  settings.set('homeSpot', { fx: 0.25, fy: 0.5 }); send('settings', settings.all()); await sleep(200);
+  const gF = await js('window.__stash.geom()');
+  check('a saved spot is turned back into a screen position (as on the next launch)', Math.abs(gF.home.x - (gF.work.x + 0.25 * (gF.work.width - gF.S))) < 1 && Math.abs(gF.home.y - (gF.work.y + 0.5 * (gF.restY - gF.work.y))) < 1, `${Math.round(gF.home.x)},${Math.round(gF.home.y)}`);
+  settings.set('homeSpot', { fx: 'banana', fy: null }); send('settings', settings.all()); await sleep(200);
+  const gBad = await js('window.__stash.geom()');
+  check('a damaged saved spot is ignored: Stash uses the corner', gBad.home.x === gBad.defaultHome.x && gBad.home.y === gBad.defaultHome.y);
+  settings.set('homeSpot', null); send('settings', settings.all()); await sleep(200);
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} checks passed${failed.length ? ' - FAILED: ' + failed.map((f) => f.name).join('; ') : ''}`);

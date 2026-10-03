@@ -7,7 +7,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node test/core.test.js && node test/plugin.test.js && node test/pong.test.js && node test/updater.test.js",
+    "test": "node test/core.test.js && node test/plugin.test.js && node test/pong.test.js && node test/updater.test.js && node test/home-spot.test.js",
     "selftest": "node test/run-selftest.js",
     "realtest": "powershell -NoProfile -ExecutionPolicy Bypass -File test/real-input.ps1",
     "pack": "electron-builder --dir --win",

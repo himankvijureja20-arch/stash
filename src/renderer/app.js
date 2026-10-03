@@ -5,6 +5,7 @@ import { createSettings } from './settings.js';
 import { createKeep } from './keep.js';
 import { createPong } from './pong.js';
 import { createOnboarding } from './onboarding.js';
+import { spotFromPos, posFromSpot, cleanSpot } from './home-spot.js';
 
 const $ = (id) => document.getElementById(id);
 const stashEl = $('stash'), flipEl = $('flip'), bobEl = $('bob'), spriteEl = $('sprite');
@@ -16,6 +17,7 @@ const ROAM_SECS = { chill: [60, 180], normal: [20, 90], hyper: [8, 30] };
 const POKE_SPEED = 3200;     // px/s at the moment the cursor enters Stash; quick but normal aiming is well below this
 const STUFFED_AT = 20;       // unsent images before Stash looks stuffed
 const PATROL_EVERY = 15 * 60 * 1000;
+const PARK_MS = 10 * 60 * 1000;      // after you put Stash somewhere, it stays put this long before it starts roaming again
 const SLEEP_AFTER = 10 * 60; // seconds of no input
 const BLINKERS = new Set(['Idle', 'Roaming', 'Patrol 15 Min', 'Notice', 'Ready To Catch', 'Dodge', 'Spit Out', 'Stuffed', 'Game Mode']);
 
@@ -29,6 +31,7 @@ let holdToken = 0, moveToken = 0;
 let busy = false, moving = false, sleeping = false, wakeArmed = true;
 let menuOpen = false, hovering = false, dragNear = false, debugHold = false, panelOpen = false;
 let dodgeCooldown = 0, spriteOver = false, patrolTimer = null;
+let drag = null, selfDragging = false, suppressClick = false, parkUntil = 0;   // picking Stash up and carrying it
 let panel, settingsUI, keep, pong, onboarding;   // created at boot
 let pongOpen = false, moodToken = 0;
 const cur = { x: -999, y: -999, t: 0, v: 0 };
@@ -41,7 +44,9 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // ---------- geometry ----------
 const floorY = () => scr.work.y + scr.work.height;
 const restY = () => floorY() - S * 0.94;
-const home = () => ({ x: scr.work.x + scr.work.width - S - 28, y: restY() });
+const defaultHome = () => ({ x: scr.work.x + scr.work.width - S - 28, y: restY() });
+// home is where you last put Stash down, or the bottom-right corner until you do
+const home = () => { const sp = cleanSpot(cfg.homeSpot); return sp ? clampFree(posFromSpot(sp, S, scr.work, restY())) : defaultHome(); };
 const clampPos = (p) => ({ x: clamp(p.x, scr.work.x + 8, scr.work.x + scr.work.width - S - 8), y: clamp(p.y, scr.work.y + 8, restY()) });
 const center = () => ({ x: pos.x + S / 2, y: pos.y + S / 2 });
 
@@ -177,7 +182,7 @@ function scheduleRoam() {
   const [a, b] = ROAM_SECS[cfg.roam] || ROAM_SECS.normal;
   roamTimer = setTimeout(roamNow, (rand(a, b) * 1000) / TS);
 }
-const calm = () => !busy && !moving && !sleeping && !menuOpen && !panelOpen && !hovering && !dragNear && !debugHold && !(keep && keep.isOpen()) && !pongOpen && !(onboarding && onboarding.isOpen()) && (stateName === 'Idle' || stateName === 'Stuffed' || stateName === 'Notice');
+const calm = () => !busy && !drag && performance.now() >= parkUntil && !moving && !sleeping && !menuOpen && !panelOpen && !hovering && !dragNear && !debugHold && !(keep && keep.isOpen()) && !pongOpen && !(onboarding && onboarding.isOpen()) && (stateName === 'Idle' || stateName === 'Stuffed' || stateName === 'Notice');
 async function roamNow() {
   if (calm()) await hopTo(randomSpot());
   scheduleRoam();
@@ -227,7 +232,7 @@ const overSprite = (x, y) => { const r = hitRect(); return x >= r.x0 && x <= r.x
 
 let lastInteractive = false;
 function syncInteractive() {
-  const want = hovering || menuOpen;
+  const want = hovering || menuOpen || selfDragging || !!drag;
   if (want !== lastInteractive) { lastInteractive = want; (window.__ilog = window.__ilog || []).push([Math.round(performance.now()), want]); if (window.__ilog.length > 60) window.__ilog.shift(); window.stash.setInteractive(want); }
 }
 
@@ -245,8 +250,9 @@ async function dodge() {
   }
   dir = -dashDir; flipEl.style.setProperty('--dir', dir); // Dodge art has its cursor + lines on the right
   const t = ++holdToken; busy = true; setState('Dodge');
-  const from = { ...pos }, t0 = performance.now(), ms = 130;
+  const from = { ...pos }, t0 = performance.now(), ms = 130, mt = moveToken;
   for (;;) {
+    if (mt !== moveToken) return;                       // picked up (or sent elsewhere) mid-dash
     const u = Math.min(1, (performance.now() - t0) / ms);
     const e = 1 - Math.pow(1 - u, 3);
     pos.x = from.x + (to.x - from.x) * e; applyPos();
@@ -263,6 +269,7 @@ function onMove(x, y, ts) {
   cur.fresh = false;
   cur.v = cur.v * 0.4 + sp * 0.6; cur.x = x; cur.y = y; cur.t = ts;
 
+  if (drag) { dragMove(x, y, ts); return; }
   const over = overSprite(x, y);
   const overUi = (() => { const t = document.elementFromPoint(x, y); return !!(t && t.closest && t.closest('.hit')); })();
   const entered = over && !spriteOver;
@@ -294,6 +301,7 @@ window.stash.on('cursor', (x, y) => {
 
 // ---------- catching ----------
 window.stash.on('drag-near', async (v) => {
+  if (selfDragging || drag) return;                     // we are carrying Stash ourselves, nothing is being dropped on it
   dragNear = v;
   document.body.classList.toggle('near', v);
   if (v) {
@@ -366,10 +374,103 @@ window.stash.on('sync', async (e) => {
   else toast(`Sent ${e.n} images to Figma`, 'accent');
 });
 
+// ---------- pick Stash up and put it down ----------
+// Press on Stash and drag: it is lifted and follows the cursor (any state, any place on screen).
+// A press without movement is still a normal click (panel / menu).
+const CARRY_AFTER = 5;                                     // px of movement before a press becomes a carry
+const clampFree = (p) => ({ x: clamp(p.x, scr.work.x, scr.work.x + scr.work.width - S), y: clamp(p.y, scr.work.y, restY()) });
+
+stashEl.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0 || pongOpen || debugHold || drag) return;
+  if (!overSprite(e.clientX, e.clientY)) return;
+  drag = { sx: e.clientX, sy: e.clientY, offX: e.clientX - pos.x, offY: e.clientY - pos.y, started: false, vx: 0, vy: 0, t: performance.now(), id: e.pointerId };
+  try { stashEl.setPointerCapture(e.pointerId); } catch (_) { /* synthetic pointer */ }
+  syncInteractive();
+});
+window.addEventListener('pointerup', () => dragEnd());
+window.addEventListener('pointercancel', () => dragEnd());
+window.stash.on('mouse-up', () => dragEnd());               // real release, even if the page never saw it
+
+function startCarry() {
+  drag.started = true; selfDragging = true; window.stash.selfDrag(true);
+  cancelMove(); closeMenu(); sleeping = false;
+  if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
+  document.body.classList.remove('near');
+  lock('Ready To Catch');                                   // surprised, arms up: "I'm being picked up!"
+  stashEl.classList.add('held'); document.body.classList.add('carrying');
+}
+
+function dragMove(x, y, ts) {
+  const d = drag;
+  if (!d.started) { if (Math.hypot(x - d.sx, y - d.sy) < CARRY_AFTER) return; startCarry(); }
+  const to = clampFree({ x: x - d.offX, y: y - d.offY });
+  const dt = Math.max(0.001, (ts - d.t) / 1000);
+  d.vx = d.vx * 0.6 + ((to.x - pos.x) / dt) * 0.4;           // smoothed speed, used for the sway now and the toss on release
+  d.vy = d.vy * 0.6 + ((to.y - pos.y) / dt) * 0.4;
+  d.t = ts;
+  bobEl.style.setProperty('--sway', clamp(d.vx / 45, -24, 24).toFixed(1) + 'deg');   // hangs from the scruff, swings with the movement
+  pos = to; applyPos(true);
+}
+
+function dragEnd() {
+  const d = drag;
+  if (!d) return;
+  drag = null;
+  try { stashEl.releasePointerCapture(d.id); } catch (_) { /* already released */ }
+  if (!d.started) { syncInteractive(); return; }             // never moved: it was just a click
+  selfDragging = false; window.stash.selfDrag(false);
+  suppressClick = true; setTimeout(() => { suppressClick = false; }, 120);
+  stashEl.classList.remove('held'); document.body.classList.remove('carrying');
+  bobEl.style.setProperty('--sway', '0deg');
+  spriteOver = overSprite(cur.x, cur.y); hovering = spriteOver;      // keep hover bookkeeping honest after the carry
+  putDown(d);
+}
+
+// Set Stash down where it was let go: a small toss from the release speed, a landing squash, then it remembers the spot.
+async function putDown(d) {
+  cancelMove();
+  const token = ++moveToken;
+  if (performance.now() - d.t > 90) { d.vx = 0; d.vy = 0; }       // held still before letting go: no toss
+  const from = { ...pos };
+  const to = clampFree({ x: from.x + clamp(d.vx * 0.12, -120, 120), y: from.y + clamp(d.vy * 0.12, -120, 120) });
+  const t0 = performance.now(), ms = 220;
+  for (;;) {
+    if (token !== moveToken) return;                               // picked up again mid-toss
+    const u = Math.min(1, (performance.now() - t0) / ms), e = 1 - Math.pow(1 - u, 3);
+    pos = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e }; applyPos();
+    if (u >= 1) break;
+    await frame();
+  }
+  applyPos(true);
+  land(); unlock(); activity('Notice', 700);
+  syncInteractive();
+  rememberSpot();
+}
+
+// The spot becomes home (saved, so it survives a restart) and Stash stays parked there for a while.
+function rememberSpot() {
+  const sp = spotFromPos(pos, S, scr.work, restY());
+  cfg.homeSpot = sp; window.stash.setSetting('homeSpot', sp);
+  parkUntil = performance.now() + PARK_MS / TS;
+  if (!cfg.pickedUpHint) {
+    cfg.pickedUpHint = true; window.stash.setSetting('pickedUpHint', true);
+    toast('This is my spot now. Tray menu > Put Stash back in the corner undoes it.', 'accent', 5200);
+  }
+}
+
+async function resetHome() {
+  cfg.homeSpot = null; window.stash.setSetting('homeSpot', null); parkUntil = 0;
+  if (pongOpen || drag) return;
+  cancelMove(); sleeping = false; lock('Roaming');
+  await hopTo(home(), { keepState: true, hops: 3 });
+  unlock();
+  toast('Back in the corner.', 'success', 2400);
+}
+
 // ---------- click + menu ----------
 let clickTimer = null;
 stashEl.addEventListener('click', () => {
-  if (menuOpen) return;
+  if (menuOpen || suppressClick) return;
   if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; openMenu(); return; }   // double click
   clickTimer = setTimeout(() => { clickTimer = null; openPanel(); }, 260);                // single click
 });
@@ -438,6 +539,7 @@ window.stash.on('menu-action', (a) => {
   if (a === 'open-stash' && !panel.isOpen()) openPanel();
   if (a === 'settings') settingsUI.open();
   if (a === 'onboarding') onboarding.open();
+  if (a === 'reset-home') resetHome();
   if (a === 'plugin-setup') toast(PLUGIN_STEPS, 'accent', 8000);
 });
 
@@ -535,6 +637,8 @@ window.__stash = {
   info: () => ({ stateName, pos: { ...pos }, dir, sleeping, moving, busy, counts }),
   fire: { dodge, patrol, roam: roamNow, nap: napNow, wake },
   stopPatrolTimer: () => clearInterval(patrolTimer),
+  geom: () => ({ S, work: scr.work, restY: restY(), home: home(), defaultHome: defaultHome() }),
+  clearPark: () => { parkUntil = 0; },
   resetCursor: () => { cur.v = 0; cur.fresh = true; spriteOver = false; hovering = false; },
   dbg: () => ({ stateName, pos: { ...pos }, dir, spriteOver, hovering, busy, moving, sleeping, panelOpen, menuOpen, keepOpen: !!(keep && keep.isOpen()), debugHold, dragNear, cur: { ...cur }, hit: hitRect() }),
   drop: handleDrop,
@@ -559,7 +663,7 @@ window.__stash = {
   let keepShown = false;
   const placeToasts = () => toastsEl.classList.toggle('beside', panelOpen || keepShown);
   panel = createPanel({ root: stage, anchor, toast, hint: (o) => { panelOpen = o; placeToasts(); } });
-  settingsUI = createSettings({ root: stage, toast, getVersion: () => b.version });
+  settingsUI = createSettings({ root: stage, toast, getVersion: () => b.version, onResetHome: () => resetHome() });
   settingsUI.setConfig(cfg);
   pong = createPong({ root: stage, getScreen: () => scr, onEvent: onPong });
   onboarding = createOnboarding({ root: stage, onDone: () => {

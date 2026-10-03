@@ -15,6 +15,8 @@ public class RealInput {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, uint d, UIntPtr e);
   public static double IdleSeconds() { LII l = new LII(); l.cbSize = (uint)Marshal.SizeOf(l); GetLastInputInfo(ref l); return ((uint)Environment.TickCount - l.dwTime) / 1000.0; }
+  public static void Down() { mouse_event(0x2,0,0,0,UIntPtr.Zero); }
+  public static void Up() { mouse_event(0x4,0,0,0,UIntPtr.Zero); }
   public static void Click() { mouse_event(0x2,0,0,0,UIntPtr.Zero); System.Threading.Thread.Sleep(50); mouse_event(0x4,0,0,0,UIntPtr.Zero); }
 }
 '@
@@ -53,6 +55,25 @@ try {
   [RealInput]::Click(); Start-Sleep -Milliseconds 700
   Check 'real single click on Stash opens the panel' ((Eval 'window.__stash.panel.snapshot().open') -eq 'true')
   Eval 'window.__stash.panel.close(); 1' | Out-Null; Start-Sleep -Milliseconds 700
+  # a real drag: pick Stash up, carry it across the screen, put it down
+  $c = (Eval 'JSON.stringify((function(){var b=window.__stash.box(); return [Math.round(b.x+b.w*0.55), Math.round(b.y+b.h*0.6)]})())') | ConvertFrom-Json
+  $p0 = (Eval 'JSON.stringify(window.__stash.info().pos)') | ConvertFrom-Json
+  [void][RealInput]::SetCursorPos($c[0] - 200, $c[1] - 120); Start-Sleep -Milliseconds 200
+  Glide ($c[0] - 200) ($c[1] - 120) $c[0] $c[1]; Start-Sleep -Milliseconds 350
+  [RealInput]::Down(); Start-Sleep -Milliseconds 150
+  $tx = [Math]::Max(150, $c[0] - 700); $ty = [Math]::Max(150, $c[1] - 350)
+  Glide $c[0] $c[1] $tx $ty
+  Start-Sleep -Milliseconds 250
+  Check 'pressing on Stash and dragging with the real mouse lifts it' ((Eval 'String(document.getElementById(''stash'').classList.contains(''held''))') -eq 'true')
+  [RealInput]::Up(); Start-Sleep -Milliseconds 900
+  $p1 = (Eval 'JSON.stringify(window.__stash.info().pos)') | ConvertFrom-Json
+  Check 'letting go puts it down, hundreds of pixels from where it was' (([Math]::Abs($p1.x - $p0.x) + [Math]::Abs($p1.y - $p0.y)) -gt 300)
+  Check 'a real carry does not open the panel or the menu' (((Eval 'String(window.__stash.panel.snapshot().open)') -eq 'false') -and ((Eval 'String(!document.getElementById(''menu'').hidden)') -eq 'false'))
+  Check 'and the new spot is saved' ($null -ne ((Get-Content (Join-Path $data 'settings.json') -Raw | ConvertFrom-Json).homeSpot))
+  Start-Sleep -Milliseconds 800
+  $c = (Eval 'JSON.stringify((function(){var b=window.__stash.box(); return [Math.round(b.x+b.w*0.55), Math.round(b.y+b.h*0.6)]})())') | ConvertFrom-Json
+  [void][RealInput]::SetCursorPos($c[0] - 200, $c[1] - 120); Start-Sleep -Milliseconds 200
+  Glide ($c[0] - 200) ($c[1] - 120) $c[0] $c[1]; Start-Sleep -Milliseconds 400
   [RealInput]::Click(); Start-Sleep -Milliseconds 90; [RealInput]::Click(); Start-Sleep -Milliseconds 700
   Check 'real double click on Stash opens the menu' ((Eval 'String(!document.getElementById(''menu'').hidden)') -eq 'true')
 } finally {

@@ -140,3 +140,7 @@
 .k-sub { font: 400 12px/16px 'DM Sans', sans-serif; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .k-btns { display: flex; gap: 8px; }
 .k-btns .p-btn { height: 41px; flex: 1; }
+
+/* small action button used in Settings rows */
+.mini-btn { padding: 6px 12px; border-radius: 9px; border: 1.5px solid var(--border); background: var(--surface); font: 700 12px/16px 'DM Sans', sans-serif; color: var(--text); cursor: pointer; flex: none; transition: background .12s, transform .12s var(--spring); user-select: none; }
+.mini-btn:hover { background: var(--bg); } .mini-btn:active { transform: scale(.96); }

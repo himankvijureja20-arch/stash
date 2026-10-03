@@ -28,6 +28,9 @@ Stash pop-up. Keep the plugin open (minimised is fine) and images land in the fi
 - `figma-plugin` the Stash plugin
 - `assets/icons` app + tray icons exported from Figma
 
+## Moving Stash
+Press on Stash and drag: it is lifted and follows the cursor; let go and it is put down there, remembers the spot (saved in settings as `homeSpot`) and stays parked for 10 minutes before it roams again. Patrols, the summon hotkey and ping-pong all return it to that spot. Tray menu or Settings > Home spot puts it back in the corner. Code: `src/renderer/app.js` (pick up and put down) and `src/renderer/home-spot.js`.
+
 ## Sharing it
 `npm run dist` builds the installer (`Stash-Setup.exe`); `npm run pack` builds just the app folder for testing.
 `docs/` is the download page (`node docs/build-site.mjs` regenerates it). See **RELEASING.md** for putting it on GitHub,

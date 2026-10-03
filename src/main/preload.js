@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('stash', {
   setInteractive: (v) => ipcRenderer.send('set-interactive', v),
   spriteBox: (b) => ipcRenderer.send('sprite-box', b),
   panelBox: (b) => ipcRenderer.send('panel-box', b),
+  selfDrag: (v) => ipcRenderer.send('self-drag', v),
   idleSeconds: () => ipcRenderer.invoke('idle-seconds'),
   pluginUp: () => ipcRenderer.invoke('plugin-up'),
   setSetting: (k, v) => ipcRenderer.send('set-setting', k, v),

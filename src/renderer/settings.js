@@ -23,7 +23,7 @@ export function acceleratorFromEvent(e) {
   return { accel: [...mods, key].join('+') };
 }
 
-export function createSettings({ root, toast, getVersion }) {
+export function createSettings({ root, toast, getVersion, onResetHome }) {
   let cfg = {};
   let open = false, recording = false;
 
@@ -61,6 +61,7 @@ export function createSettings({ root, toast, getVersion }) {
     input.addEventListener('blur', () => { commit(); if (!recording) window.stash.setFocusable(false); });
     return wrap;
   };
+  const button = (text, fn) => h('div', { class: 'mini-btn', onclick: fn }, text);
   const row = (label, control, extra = '') => h('div', { class: 'row' + extra }, h('span', { class: 'row-l' }, label), control);
 
   // hotkey keycaps + recorder
@@ -108,6 +109,7 @@ export function createSettings({ root, toast, getVersion }) {
       row('Roam how often', seg('roam', [{ v: 'chill', label: 'Chill' }, { v: 'normal', label: 'Normal' }, { v: 'hyper', label: 'Hyper' }])),
       row('15-minute patrol reminder', toggle('patrolReminder')),
       row('Ask before keeping copied images', toggle('askBeforeKeep')),
+      row('Home spot', button('Put back in the corner', () => { onResetHome(); })),
       hr(),
       label('FIGMA EXPORT'),
       row('Auto-sync to Figma', toggle('autoSync')),
