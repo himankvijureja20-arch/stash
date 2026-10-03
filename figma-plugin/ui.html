@@ -1,0 +1,136 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#FFF8EF; --surface:#fff; --border:#EADBC6; --text:#2A1B12; --muted:#8A7563; --accent:#B8622E; --accent-soft:#F3DCC6; --ok:#6E8B3D; --bad:#C2412D; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 13px/1.4 'DM Sans', system-ui, 'Segoe UI', sans-serif; color: var(--text); background: var(--bg); padding: 16px; display: flex; flex-direction: column; gap: 14px; user-select: none; }
+  .status { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.busy { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .lbl { font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
+  .into { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 9px 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .into.empty { color: var(--muted); }
+  .row { display: flex; align-items: center; justify-content: space-between; font-weight: 500; }
+  .tg { width: 40px; height: 24px; border-radius: 12px; background: var(--border); position: relative; cursor: pointer; transition: background .2s; flex: none; }
+  .tg i { position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(41,26,18,.25); transition: transform .22s cubic-bezier(.34,1.56,.64,1); }
+  .tg.on { background: var(--accent); } .tg.on i { transform: translateX(16px); }
+  .stats { display: flex; gap: 8px; }
+  .stat { flex: 1; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 9px 12px; }
+  .stat b { display: block; font-size: 20px; line-height: 26px; font-family: 'Bricolage Grotesque', 'DM Sans', system-ui, sans-serif; }
+  .stat span { color: var(--muted); font-size: 11px; }
+  button { width: 100%; padding: 12px; border: 0; border-radius: 12px; background: var(--accent); color: #fff; font: 700 14px 'DM Sans', system-ui, sans-serif; cursor: pointer; transition: transform .12s; }
+  button:active { transform: scale(.98); }
+  .note { color: var(--muted); font-size: 12px; line-height: 14px; }
+  #log { color: var(--muted); font-size: 11px; min-height: 14px; }
+</style>
+</head>
+<body>
+  <div class="status"><span class="dot" id="dot"></span><span id="status">Looking for Stash...</span></div>
+  <div>
+    <div class="lbl">SYNC INTO</div>
+    <div class="into empty" id="into">Nothing placed yet</div>
+  </div>
+  <div class="row"><span>Auto-sync new images</span><div class="tg on" id="auto"><i></i></div></div>
+  <div class="stats">
+    <div class="stat"><b id="placed">0</b><span>placed</span></div>
+    <div class="stat"><b id="dups">0</b><span>duplicates skipped</span></div>
+  </div>
+  <button id="sync">Sync now</button>
+  <div class="note">Keep this open (minimised is fine). Close it and sync pauses until you reopen it.</div>
+  <div id="log"></div>
+
+<script>
+const BASE = 'http://localhost:47821';
+let token = null, busy = false, connected = false, forceNext = false, autoOn = true, config = null;
+let placed = 0, dups = 0;
+const $ = (id) => document.getElementById(id);
+const waiting = new Map(); // item id -> resolver for the main thread's answer
+let tokenResolve;
+
+function setStatus(text, kind) { $('status').textContent = text; $('dot').className = 'dot ' + (kind || ''); }
+function log(t) { $('log').textContent = t || ''; }
+
+window.onmessage = (e) => {
+  const m = e.data.pluginMessage;
+  if (!m) return;
+  if (m.type === 'token' && tokenResolve) tokenResolve(m.value);
+  if (m.type === 'placed' || m.type === 'place-error') { const r = waiting.get(m.id); if (r) { waiting.delete(m.id); r(m); } }
+};
+const getSavedToken = () => new Promise((r) => { tokenResolve = r; parent.postMessage({ pluginMessage: { type: 'get-token' } }, '*'); });
+
+async function api(path, opts = {}) {
+  const res = await fetch(BASE + path, { ...opts, headers: { 'x-stash-token': token || '', 'content-type': 'application/json', ...(opts.headers || {}) } });
+  if (res.status === 401) { token = null; connected = false; throw new Error('unauthorized'); }
+  return res;
+}
+
+async function connect() {
+  try { await fetch(BASE + '/ping'); } catch (_) { setStatus("Stash isn't running", 'bad'); connected = false; return false; }
+  const saved = await getSavedToken();
+  setStatus('Waiting for you to click Allow in Stash...', 'busy');
+  const res = await fetch(BASE + '/connect', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: saved }) });
+  if (!res.ok) { setStatus('Stash said no. Reopen the plugin to retry.', 'bad'); return false; }
+  token = (await res.json()).token;
+  parent.postMessage({ pluginMessage: { type: 'set-token', value: token } }, '*');
+  connected = true;
+  setStatus('Connected to Stash on this PC', 'ok');
+  return true;
+}
+
+// Figma rejects images over 4096px on a side, so shrink those first.
+async function prepare(bytes, mime) {
+  const bmp = await createImageBitmap(new Blob([bytes], { type: mime }));
+  const max = Math.max(bmp.width, bmp.height);
+  if (max <= 4096) { bmp.close(); return bytes; }
+  const s = 4096 / max;
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close();
+  const out = await new Promise((r) => c.toBlob(r, 'image/png'));
+  return new Uint8Array(await out.arrayBuffer());
+}
+
+async function syncOnce() {
+  if (busy) return;
+  busy = true;
+  try {
+    if (!connected && !(await connect())) return;
+    const force = forceNext; forceNext = false;
+    const res = await (await api(`/pending?auto=${autoOn ? 1 : 0}&force=${force ? 1 : 0}`)).json();
+    config = res.config || config;
+    if (config) parent.postMessage({ pluginMessage: { type: 'config', config } }, '*');
+    if (res.held) setStatus(`Connected. ${res.held} waiting (sync is paused)`, 'ok');
+    else if (!res.items.length) setStatus('Connected to Stash on this PC', 'ok');
+    for (const item of res.items) {
+      setStatus('Placing images...', 'busy');
+      const raw = new Uint8Array(await (await api('/image/' + item.id)).arrayBuffer());
+      const bytes = await prepare(raw, item.mime);
+      const result = await new Promise((resolve) => {
+        waiting.set(item.id, resolve);
+        parent.postMessage({ pluginMessage: { type: 'place', item, bytes, config } }, '*');
+      });
+      if (result.type === 'place-error') { log('Could not place one image: ' + result.message); continue; }
+      await api('/ack', { method: 'POST', body: JSON.stringify({ id: item.id, figmaNodeId: result.nodeId }) });
+      if (result.status === 'placed') placed++; else dups++;
+      $('placed').textContent = placed; $('dups').textContent = dups;
+      $('into').textContent = result.frame; $('into').classList.remove('empty');
+      log(result.status === 'placed' ? 'Placed 1 image in "' + result.frame + '"' : 'Skipped a duplicate');
+      setStatus('Connected to Stash on this PC', 'ok');
+    }
+  } catch (e) {
+    if (e.message !== 'unauthorized') { connected = false; setStatus('Lost Stash. Retrying...', 'bad'); }
+  } finally { busy = false; }
+}
+
+$('auto').onclick = () => { autoOn = !autoOn; $('auto').classList.toggle('on', autoOn); };
+$('sync').onclick = () => { forceNext = true; syncOnce(); };
+setInterval(syncOnce, 1000);   // keeps polling even with auto-sync off, so Stash knows Figma is listening
+syncOnce();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "Stash",
+  "id": "stash-figma-plugin-dev",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "documentAccess": "dynamic-page",
+  "networkAccess": {
+    "allowedDomains": ["none"],
+    "devAllowedDomains": ["http://localhost:47821"],
+    "reasoning": "Talks to the Stash desktop app running on this computer."
+  }
+}

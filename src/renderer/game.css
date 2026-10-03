@@ -1,0 +1,55 @@
+/* Stash Pong (Figma 05) and the first-run intro (Figma 04 Onboarding). */
+
+/* ----- squirrel paddle follows the AI's paddle while a game is open ----- */
+#sprite { --aim: 0; }
+[data-state="Game Mode"] [data-p="paddle"], [data-state="Game Mode"] [data-p="arm-r"] { transform: rotate(calc(var(--aim) * 24deg)); transform-origin: 143px 116px; transition: transform .09s linear; }
+
+/* ----- pong ----- */
+#pong { position: absolute; right: 0; bottom: 24px; width: 340px; height: 620px; background: #1B120C; border-radius: 14px 0 0 14px; overflow: hidden; z-index: 15; transform-origin: right bottom; transform: scale(var(--ps, 1)); transition: transform .5s var(--spring); font-family: 'Press Start 2P', monospace; color: #F6E7CF; box-shadow: var(--shadow); image-rendering: pixelated; }
+#pong[hidden] { display: none; }
+#pong.opening, #pong.closing { transform: translateX(110%) scale(var(--ps, 1)); transition: transform .38s cubic-bezier(.5, 0, .75, 0); }
+#pong.opening { transition: none; }
+#pong::after { content: ''; position: absolute; inset: 0; border: 3px solid #D99A5B; border-radius: 14px 0 0 14px; pointer-events: none; z-index: 6; }
+#pong.shake { animation: pgshake .28s; }
+@keyframes pgshake { 0%, 100% { translate: 0 0; } 25% { translate: -3px 2px; } 75% { translate: 3px -2px; } }
+.pg-canvas { position: absolute; left: 0; top: 0; width: 340px; height: 620px; z-index: 1; image-rendering: pixelated; }
+.pg-header { position: absolute; left: 0; top: 0; width: 340px; height: 48px; background: #2A1B12; z-index: 4; }
+.pg-title { position: absolute; left: 16px; top: 20px; font-size: 10px; line-height: 10px; }
+.pg-esc { position: absolute; left: 294px; top: 21px; font-size: 8px; line-height: 8px; cursor: pointer; opacity: .85; }
+.pg-esc:hover { color: #D99A5B; opacity: 1; }
+.pg-mini { position: absolute; left: 226px; top: -2px; width: 56px; height: 56px; }
+.pg-mini .sq-svg { width: 100%; height: 100%; }
+.pg-hint { position: absolute; left: 0; top: 596px; width: 340px; text-align: center; font-size: 7px; line-height: 10px; z-index: 4; opacity: .5; white-space: pre; }
+.pg-scan { position: absolute; inset: 0; z-index: 5; pointer-events: none; background: repeating-linear-gradient(to bottom, rgba(246, 231, 207, .05) 0 2px, transparent 2px 6px); }
+.pg-screen { position: absolute; inset: 0; background: #1B120C; z-index: 2; display: none; }
+.pg-screen.on { display: block; animation: pgfade .18s ease-out; }
+@keyframes pgfade { from { opacity: 0; } to { opacity: 1; } }
+.pg-t { position: absolute; left: 0; width: 340px; text-align: center; line-height: 1.2; white-space: pre; }
+.pg-t.s28 { font-size: 28px; } .pg-t.s24 { font-size: 24px; } .pg-t.s22 { font-size: 22px; } .pg-t.s20 { font-size: 20px; }
+.pg-t.s10 { font-size: 10px; } .pg-t.s9 { font-size: 9px; } .pg-t.s8 { font-size: 8px; } .pg-t.s7 { font-size: 7px; }
+.pg-t.tan { color: #D99A5B; } .pg-t.red { color: #C2412D; }
+.pg-t.blink { animation: pgblink 1s steps(2, start) infinite; }
+@keyframes pgblink { 0% { opacity: 1; } 50% { opacity: .15; } }
+.pg-sq { position: absolute; width: 150px; height: 150px; }
+.pg-sq .sq-svg { width: 100%; height: 100%; }
+.pg-keys span { cursor: pointer; }
+.pg-keys span:hover { color: #D99A5B; }
+
+/* ----- first-run intro ----- */
+#onboarding { position: absolute; width: 360px; box-sizing: border-box; padding: 29px 32px; display: flex; flex-direction: column; align-items: center; gap: 14px; background: #fff; border: 1px solid var(--border); border-radius: 24px; box-shadow: var(--shadow); z-index: 13; animation: panelIn .35s var(--spring); }
+#onboarding[hidden] { display: none; }
+#onboarding.closing { animation: panelOut .2s ease-in forwards; }
+.ob-stage { width: 296px; height: 200px; border-radius: 18px; background: var(--bg); display: flex; align-items: center; justify-content: center; flex: none; overflow: hidden; }
+.ob-sq { width: 190px; height: 190px; }
+.ob-sq .sq-svg { width: 100%; height: 100%; }
+.ob-sq.pop { animation: popIn .45s var(--spring); }
+.ob-title { font: 800 26px/31px 'Bricolage Grotesque', 'DM Sans', sans-serif; color: var(--text); text-align: center; }
+.ob-body { font: 400 14px/18px 'DM Sans', sans-serif; color: var(--muted); text-align: center; width: 280px; min-height: 36px; }
+.ob-title.swap, .ob-body.swap { animation: obSwap .32s ease-out; }
+@keyframes obSwap { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.ob-dots { display: flex; gap: 6px; align-items: center; height: 8px; }
+.ob-dots i { width: 8px; height: 8px; border-radius: 4px; background: var(--border); transition: width .3s var(--spring), background .2s; }
+.ob-dots i.on { width: 20px; background: var(--accent); }
+.ob-btn { width: 294px; height: 38px; border-radius: 12px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font: 700 14px 'DM Sans', sans-serif; cursor: pointer; user-select: none; transition: transform .14s var(--spring), background .12s; }
+.ob-btn:hover { background: #a9561f; }
+.ob-btn:active { transform: scale(.97); }

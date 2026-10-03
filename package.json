@@ -1,0 +1,88 @@
+{
+  "name": "stash",
+  "productName": "Stash",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A squirrel that lives on your desktop and hoards your inspo.",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test/core.test.js && node test/plugin.test.js && node test/pong.test.js && node test/updater.test.js",
+    "selftest": "node test/run-selftest.js",
+    "realtest": "powershell -NoProfile -ExecutionPolicy Bypass -File test/real-input.ps1",
+    "pack": "electron-builder --dir --win",
+    "dist": "electron-builder --win --publish never",
+    "selftest:packaged": "node test/run-selftest.js --packaged"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "uiohook-napi": "^1.5.4"
+  },
+  "devDependencies": {
+    "@fontsource/bricolage-grotesque": "^5.1.0",
+    "@fontsource/dm-sans": "^5.1.0",
+    "@fontsource/press-start-2p": "^5.1.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "author": "Himank",
+  "homepage": "https://github.com/himankvijureja20-arch/stash",
+  "build": {
+    "appId": "app.stash.desktop",
+    "productName": "Stash",
+    "copyright": "Stash",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "figma-plugin",
+        "to": "figma-plugin",
+        "filter": [
+          "manifest.json",
+          "code.js",
+          "ui.html"
+        ]
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/uiohook-napi/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icons/app-icon-1024.png",
+      "artifactName": "Stash-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": false,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "Stash"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "himankvijureja20-arch",
+        "repo": "stash",
+        "releaseType": "release"
+      }
+    ],
+    "npmRebuild": false
+  }
+}
