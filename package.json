@@ -1,7 +1,7 @@
 {
   "name": "stash",
   "productName": "Stash",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "A squirrel that lives on your desktop and hoards your inspo.",
   "main": "src/main/main.js",
