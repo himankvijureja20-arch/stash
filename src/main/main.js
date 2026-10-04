@@ -24,8 +24,21 @@ let lastPluginPoll = 0, pluginWasUp = false, forceSendUntil = 0;
 let batch = null;
 let updater = null;
 let pendingClip = null;
+let ctl = null, quitting = false, suspended = false, pingFails = 0, wakeups = 0, hook = null;
 
-const log = (...a) => console.log('[stash]', ...a);
+// Windows can be fussy about GPU-composited transparent windows after sleep; this removes one cause of a frozen overlay.
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
+app.setAppUserModelId('app.stash.desktop');
+
+let logPath = null;
+const log = (...a) => {
+  console.log('[stash]', ...a);
+  try {
+    if (!logPath) logPath = path.join(process.env.STASH_DATA || app.getPath('userData'), 'stash.log');
+    try { if (fs.statSync(logPath).size > 400000) fs.renameSync(logPath, logPath + '.old'); } catch (_) { /* no log yet */ }
+    fs.appendFileSync(logPath, new Date().toISOString() + ' ' + a.map((x) => (x instanceof Error ? x.stack : typeof x === 'object' ? JSON.stringify(x) : String(x))).join(' ') + '\n');
+  } catch (_) { /* logging must never break the app */ }
+};
 const send = (ch, ...args) => { if (win && !win.isDestroyed()) win.webContents.send(ch, ...args); };
 const pluginUp = () => Date.now() - lastPluginPoll < 5000;
 
@@ -40,20 +53,126 @@ function applyMouseMode() {
 
 function createWindow() {
   const b = display().bounds;
-  win = new BrowserWindow({
+  const w = new BrowserWindow({
     x: b.x, y: b.y, width: b.width, height: b.height,
     transparent: true, frame: false, resizable: false, movable: false, hasShadow: false,
     skipTaskbar: true, alwaysOnTop: true, focusable: false, show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
   });
-  win.setAlwaysOnTop(true, 'screen-saver');
-  win.setVisibleOnAllWorkspaces(true);
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.once('ready-to-show', () => { win.showInactive(); applyMouseMode(); });
-  screen.on('display-metrics-changed', () => {
-    win.setBounds(display().bounds);
-    send('screen', screenInfo());
+  win = w;
+  interactive = false; dragNear = false; selfDrag = false; pingFails = 0;
+  w.setAlwaysOnTop(true, 'screen-saver');
+  w.setVisibleOnAllWorkspaces(true);
+  w.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  w.once('ready-to-show', () => { if (win !== w) return; if (!hidden) w.showInactive(); applyMouseMode(); });
+  w.webContents.on('render-process-gone', (_e, d) => { log('overlay renderer gone:', d.reason); if (win === w) recreateOverlay('renderer gone: ' + d.reason); });
+  w.webContents.on('did-fail-load', (_e, code, desc) => { log('overlay failed to load:', code, desc); if (win === w) setTimeout(() => { if (win === w) recreateOverlay('load failed'); }, 2000); });
+  w.on('unresponsive', () => {
+    log('overlay unresponsive');
+    setTimeout(() => { if (win === w && !w.isDestroyed() && w.webContents.isCrashed?.() !== false) recreateOverlay('unresponsive'); }, 8000);
   });
+}
+
+// Build a fresh overlay and drop the old one. Fixes a window that Windows or the GPU left stuck.
+const recreations = [];
+function recreateOverlay(why) {
+  const now = Date.now();
+  while (recreations.length && now - recreations[0] > 60000) recreations.shift();
+  if (recreations.length >= 4) { log('too many overlay rebuilds, waiting:', why); return; }
+  recreations.push(now);
+  wakeups++;
+  log('rebuilding overlay:', why);
+  const old = win;
+  createWindow();
+  if (old && !old.isDestroyed()) old.destroy();
+  pushCtlState();
+}
+
+// Cheap checks that run now and then: is the page alive, is it still on top, is the click-through mode right.
+function ping(ms = 3000) {
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  return Promise.race([
+    win.webContents.executeJavaScript('1').then(() => true, () => false),
+    new Promise((r) => setTimeout(() => r(false), ms)),
+  ]);
+}
+
+function reassert() {
+  if (!win || win.isDestroyed()) return;
+  const b = display().bounds, cb = win.getBounds();
+  if (cb.x !== b.x || cb.y !== b.y) win.setBounds(b);
+  if (!hidden) {
+    win.setAlwaysOnTop(true, 'screen-saver');
+    if (!win.isVisible()) win.showInactive();
+  }
+  applyMouseMode();
+  send('resync');
+}
+
+function startWatchdog() {
+  if (process.env.STASH_SELFTEST) return;
+  setInterval(async () => {
+    if (suspended || !win || win.isDestroyed()) return;
+    if (await ping(4000)) { pingFails = 0; return; }
+    if (++pingFails >= 2) { log('overlay stopped answering'); recreateOverlay('stopped answering'); }
+  }, 6000);
+  setInterval(() => { if (!suspended) reassert(); }, 4000);
+  app.on('child-process-gone', (_e, d) => {
+    log('child process gone:', d.type, d.reason);
+    if (d.type === 'GPU') setTimeout(() => recreateOverlay('gpu process ' + d.reason), 1500);
+  });
+  powerMonitor.on('suspend', () => { suspended = true; log('sleep'); });
+  powerMonitor.on('resume', () => { suspended = false; log('woke up'); setTimeout(() => recoverAfterWake('resume'), 2500); });
+  powerMonitor.on('lock-screen', () => log('locked'));
+  powerMonitor.on('unlock-screen', () => { log('unlocked'); setTimeout(() => recoverAfterWake('unlock'), 1500); });
+  const display_ = () => setTimeout(() => recoverAfterWake('display'), 1500);
+  screen.on('display-added', display_); screen.on('display-removed', display_);
+}
+
+async function recoverAfterWake(why) {
+  restartHook();
+  if (why === 'resume' || !(await ping())) recreateOverlay('after ' + why);
+  else reassert();
+}
+
+
+// ---------- taskbar control window ----------
+// A small window whose only job is to show a Stash button on the taskbar and give a way to wake, restart or quit Stash.
+const ctlState = () => ({ hidden, version: app.getVersion(), wakeups });
+function pushCtlState() { if (ctl && !ctl.isDestroyed()) ctl.webContents.send('ctl-state', ctlState()); }
+
+function createControl() {
+  ctl = new BrowserWindow({
+    width: 340, height: 360, resizable: false, maximizable: false, fullscreenable: false, show: false,
+    title: 'Stash', autoHideMenuBar: true, backgroundColor: '#fbf4e8',
+    icon: path.join(ICONS, 'app-icon-1024.png'),
+    webPreferences: { preload: path.join(__dirname, 'control-preload.js'), contextIsolation: true, nodeIntegration: false },
+  });
+  ctl.setMenu(null);
+  ctl.loadFile(path.join(__dirname, 'control.html'));
+  ctl.once('ready-to-show', () => { ctl.showInactive(); ctl.minimize(); });   // starts as a taskbar button only
+  ctl.on('close', () => { if (!quitting) app.quit(); });                        // closing the taskbar button closes Stash
+}
+
+function showControl() {
+  if (!ctl || ctl.isDestroyed()) return;
+  if (ctl.isMinimized()) ctl.restore();
+  ctl.show(); ctl.focus(); pushCtlState();
+}
+
+function restartApp() {
+  log('restart requested');
+  quitting = true;
+  app.releaseSingleInstanceLock();
+  app.relaunch();
+  app.quit();
+}
+
+function handleArgs(argv) {
+  if (argv.includes('--quit')) { quitting = true; app.quit(); return true; }
+  if (argv.includes('--restart')) { restartApp(); return true; }
+  if (argv.includes('--wake')) { recreateOverlay('wake from taskbar'); return true; }
+  return false;
 }
 
 function screenInfo() {
@@ -111,6 +230,7 @@ function buildTrayMenu() {
     { label: hidden ? 'Show Stash' : 'Hide Stash', accelerator: 'Ctrl+Shift+S', click: toggleHidden },
     { label: 'Open stash', click: () => send('menu-action', 'open-stash') },
     { label: 'Settings', click: () => send('menu-action', 'settings') },
+    { label: 'Wake Stash up (if it is stuck)', click: () => recreateOverlay('wake from tray') },
     { label: 'Put Stash back in the corner', click: () => send('menu-action', 'reset-home') },
     { label: 'Show intro', click: () => send('menu-action', 'onboarding') },
     { label: 'Set up the Figma plugin...', click: () => { revealPlugin(); send('menu-action', 'plugin-setup'); } },
@@ -122,6 +242,7 @@ function buildTrayMenu() {
     { type: 'separator' },
     ...(updater && updater.state.downloaded ? [{ label: 'Restart to update Stash', click: () => updater.install() }] : [{ label: 'Check for updates', click: () => checkForUpdates(true) }]),
     { label: 'Stash v' + app.getVersion(), enabled: false },
+    { label: 'Restart Stash', click: restartApp },
     { label: 'Quit Stash', click: () => app.quit() },
   ]);
 }
@@ -152,7 +273,7 @@ function applyLoginItem() {
 function toggleHidden() {
   hidden = !hidden;
   if (hidden) win.hide(); else { win.showInactive(); send('summon'); }
-  refreshTray();
+  refreshTray(); pushCtlState();
 }
 
 // ---------- cursor feed ----------
@@ -177,6 +298,7 @@ function startDragWatcher() {
   let uIOhook;
   try { ({ uIOhook } = require('uiohook-napi')); }
   catch (e) { log('drag watcher unavailable:', e.message); return; }
+  hook = uIOhook;
   let down = false, origin = null, dragging = false, releaseTimer = null;
   const setNear = (v) => {
     if (v === dragNear) return;
@@ -206,6 +328,15 @@ function startDragWatcher() {
   uIOhook.start();
   app.on('will-quit', () => { try { uIOhook.stop(); } catch (_) { /* ignore */ } });
   log('drag watcher running');
+  // If the page thinks Stash is being carried but the mouse button is up, let it go (the release was missed).
+  setInterval(() => { if (selfDrag && !down && !process.env.STASH_SELFTEST) send('mouse-up'); }, 1500);
+}
+
+// Windows quietly removes global mouse hooks after sleep/lock; put it back.
+function restartHook() {
+  if (!hook) return;
+  try { hook.stop(); } catch (_) { /* not running */ }
+  try { hook.start(); log('mouse watcher restarted'); } catch (e) { log('mouse watcher restart failed:', e.message); }
 }
 
 // ---------- Figma bridge ----------
@@ -326,6 +457,13 @@ function wireIpc() {
   ipcMain.handle('plugin-up', () => pluginUp());
   ipcMain.on('set-setting', (_e, k, v) => changeSetting(k, v));
   ipcMain.on('quit', () => app.quit());
+  ipcMain.handle('ctl-state', () => ctlState());
+  ipcMain.on('ctl-act', (_e, name) => {
+    if (name === 'toggle') toggleHidden();
+    else if (name === 'reset') recreateOverlay('wake from control window');
+    else if (name === 'restart') restartApp();
+    else if (name === 'quit') app.quit();
+  });
   ipcMain.on('focusable', (_e, v) => { if (!win) return; win.setFocusable(!!v); if (v) win.focus(); });
 
   ipcMain.handle('ingest', async (_e, payload) => {
@@ -414,8 +552,16 @@ app.whenReady().then(async () => {
   settings = new Settings(dataDir);
   log('data', dataDir, '| items', store.items.length);
   wireIpc();
+  if (handleArgs(process.argv)) return;
+  screen.on('display-metrics-changed', () => {
+    if (!win || win.isDestroyed()) return;
+    win.setBounds(display().bounds);
+    send('screen', screenInfo());
+  });
   createWindow();
   createTray();
+  if (!process.env.STASH_SELFTEST) { createControl(); setTaskbarTasks(); }
+  startWatchdog();
   applyLoginItem();
   updater = createUpdater({
     app, log,
@@ -440,6 +586,24 @@ app.whenReady().then(async () => {
   }
 });
 
-app.on('second-instance', () => { if (hidden) toggleHidden(); else send('summon'); });
+// Right-click Stash on the taskbar for these. They start Stash.exe again with a flag; the running copy obeys it.
+function setTaskbarTasks() {
+  if (!app.isPackaged) return;
+  const task = (arguments_, title, description) => ({ program: process.execPath, arguments: arguments_, iconPath: process.execPath, iconIndex: 0, title, description });
+  app.setUserTasks([
+    task('--wake', 'Wake Stash up', 'Use this if Stash is stuck'),
+    task('--restart', 'Restart Stash', 'Close and open Stash again'),
+    task('--quit', 'Quit Stash', 'Close Stash completely'),
+  ]);
+}
+
+// Opening Stash again (Start menu, or after it got stuck) wakes it up and shows the control card.
+app.on('second-instance', (_e, argv) => {
+  if (handleArgs(argv)) return;
+  if (hidden) toggleHidden();
+  recreateOverlay('opened again');
+  showControl();
+});
 app.on('window-all-closed', () => app.quit());
+app.on('before-quit', () => { quitting = true; });
 app.on('will-quit', () => { globalShortcut.unregisterAll(); if (bridge) bridge.close(); });

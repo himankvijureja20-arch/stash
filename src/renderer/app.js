@@ -236,6 +236,19 @@ function syncInteractive() {
   if (want !== lastInteractive) { lastInteractive = want; (window.__ilog = window.__ilog || []).push([Math.round(performance.now()), want]); if (window.__ilog.length > 60) window.__ilog.shift(); window.stash.setInteractive(want); }
 }
 
+// The main process asks now and then; telling it again costs nothing and heals a click-through mode that drifted out of step.
+window.stash.on('resync', () => { lastInteractive = !lastInteractive; syncInteractive(); });
+
+// Idle breathing and tail sway only run in short bursts. Running them forever keeps the GPU busy (about 15% of a core) for nothing.
+(function lifeBursts() {
+  const root = document.documentElement;
+  const burst = () => {
+    root.classList.add('alive');
+    setTimeout(() => { root.classList.remove('alive'); setTimeout(burst, 12000); }, 4700);
+  };
+  burst();
+})();
+
 async function dodge() {
   const now = performance.now();
   if (now < dodgeCooldown || debugHold) return;

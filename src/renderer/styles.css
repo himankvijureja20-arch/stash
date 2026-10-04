@@ -35,9 +35,14 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
 [data-p="torso"], [data-p="belly"] { transform: scale(var(--belly)); transform-origin: 97px 150px; transition: transform .5s var(--spring); }
 
 /* always-on life: breathing + tail sway */
-[data-p="body"] { animation: breathe 3.8s ease-in-out infinite; transform-origin: 100px 178px; }
+[data-p="body"] { animation: breathe 3.8s ease-in-out infinite; animation-play-state: paused; transform-origin: 100px 178px; }
 @keyframes breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.012, 1.028); } }
-[data-p="tail"] { animation: sway 4.6s ease-in-out infinite; transform-origin: 112px 162px; }
+[data-p="tail"] { animation: sway 4.6s ease-in-out infinite; animation-play-state: paused; transform-origin: 112px 162px; }
+:root.alive [data-p="body"], :root.alive [data-p="tail"] { animation-play-state: running; }
+/* anything lively (moving, carried, game, states with their own motion) always runs; calm states only in bursts */
+#bob.moving [data-p="body"], #stash.held [data-p="tail"], [data-state]:not([data-state="Idle"]):not([data-state="Sleeping"]):not([data-state="Stuffed"]) [data-p="body"], [data-state]:not([data-state="Idle"]):not([data-state="Sleeping"]):not([data-state="Stuffed"]):not([data-state="Sleeping"]) [data-p="tail"] { animation-play-state: running; }
+[data-state="Sleeping"] [data-p="zzz"], [data-state="Stuffed"] [data-p="body"], [data-state="Stuffed"] [data-p="tail"] { animation-play-state: paused; }
+:root.alive [data-state="Sleeping"] [data-p="zzz"], :root.alive [data-state="Stuffed"] [data-p="body"], :root.alive [data-state="Stuffed"] [data-p="tail"] { animation-play-state: running; }
 @keyframes sway { 0%, 100% { transform: rotate(-2.5deg); } 50% { transform: rotate(3deg); } }
 
 /* blink + ear twitch (triggered from JS) */
